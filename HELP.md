@@ -1,6 +1,6 @@
 # Module for Barco MatrixPro-II
 
-> this module connects via a telnet connection.
+> this module over UDP.
 
 ## Supported commands
 

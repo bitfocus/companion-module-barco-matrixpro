@@ -1,6 +1,5 @@
-var tcp = require('../../tcp');
+var udp           = require('../../udp');
 var instance_skel = require('../../instance_skel');
-var TelnetSocket = require('../../telnet');
 var debug;
 var log;
 
@@ -8,12 +7,9 @@ var log;
 function instance(system, id, config) {
 	var self = this;
 
-	// Request id counter
-	self.request_id = 0;
-	self.login = false;
 	// super-constructor
 	instance_skel.apply(this, arguments);
-	self.status(1,'Initializing');
+
 	self.actions(); // export actions
 
 	return self;
@@ -21,39 +17,20 @@ function instance(system, id, config) {
 
 instance.prototype.updateConfig = function(config) {
 	var self = this;
+
+	if (self.udp !== undefined) {
+		self.udp.destroy();
+		delete self.udp;
+	}
+
+	if (self.socket !== undefined) {
+		self.socket.destroy();
+		delete self.socket;
+	}
+
 	self.config = config;
-	self.init_tcp();
-};
 
-instance.prototype.incomingData = function(data) {
-	var self = this;
-	debug(data);
-
-	// Match part of the copyright response from unit when a connection is made.
-	// Send Info request which should reply with Matrix setup, eg: "V8X4 A8X4"
-	if (self.login === false && data.match("Welcome to MATRIXPRO-II DVI 16x16")) {
-		self.status(self.STATUS_WARNING,'Logging in');
-		self.socket.write("I"+ "\n");
-	}
-
-	if (self.login === false && data.match("Password:")) {
-		self.status(self.STATUS_WARNING,'Logging in');
-		self.socket.write(""+ "\n");
-	}
-
-	// Match first letter of expected response from unit.
-	else if (self.login === false && data.match("TELNET control")) {
-		self.login = true;
-		self.status(self.STATUS_OK);
-		debug("logged in");
-	}
-	else if (self.login === false && data.match('login incorrect')) {
-		self.log('error', "incorrect username/password (expected no password)");
-		self.status(self.STATUS_ERROR, 'Incorrect user/pass');
-	}
-	else {
-		debug("data nologin", data);
-	}
+	self.init_udp();
 };
 
 instance.prototype.init = function() {
@@ -62,60 +39,36 @@ instance.prototype.init = function() {
 	debug = self.debug;
 	log = self.log;
 
-	self.init_tcp();
+	self.init_udp();
 };
 
-instance.prototype.init_tcp = function() {
+instance.prototype.init_udp = function() {
 	var self = this;
-	var receivebuffer = '';
 
-	if (self.socket !== undefined) {
-		self.socket.destroy();
-		delete self.socket;
-		self.login = false;
+	if (self.udp !== undefined) {
+		self.udp.destroy();
+		delete self.udp;
 	}
 
-	if (self.config.host) {
-		self.socket = new TelnetSocket(self.config.host, 23);
+	self.status(self.STATE_WARNING, 'Connecting');
 
-		self.socket.on('status_change', function (status, message) {
-			if (status !== self.STATUS_OK) {
-				self.status(status, message);
-			}
-		});
+	if (self.config.host !== undefined) {
+		self.udp = new udp(self.config.host, 3000);
 
-		self.socket.on('error', function (err) {
+		self.udp.on('error', function (err) {
 			debug("Network error", err);
+			self.status(self.STATE_ERROR, err);
 			self.log('error',"Network error: " + err.message);
 		});
 
-		self.socket.on('connect', function () {
-			debug("Connected");
-			self.login = false;
+		// If we get data, thing should be good
+		self.udp.on('data', function (data) {
+			self.status(self.STATE_OK);
+			console.log("data: "+ data);
 		});
 
-		self.socket.on('error', function (err) {
-			debug("Network error", err);
-			self.log('error',"Network error: " + err.message);
-			self.login = false;
-		});
-
-		// if we get any data, display it to stdout
-		self.socket.on("data", function(buffer) {
-			var indata = buffer.toString("utf8");
-			self.incomingData(indata);
-		});
-
-		self.socket.on("iac", function(type, info) {
-			// tell remote we WONT do anything we're asked to DO
-			if (type == 'DO') {
-				socket.write(new Buffer([ 255, 252, info ]));
-			}
-
-			// tell the remote DONT do whatever they WILL offer
-			if (type == 'WILL') {
-				socket.write(new Buffer([ 255, 254, info ]));
-			}
+		self.udp.on('status_change', function (status, message) {
+			self.status(status, message);
 		});
 	}
 };
@@ -168,6 +121,9 @@ instance.prototype.destroy = function() {
 
 	if (self.socket !== undefined) {
 		self.socket.destroy();
+	}
+	if (self.udp !== undefined) {
+		self.udp.destroy();
 	}
 
 	debug("destroy", self.id);;
@@ -226,20 +182,10 @@ instance.prototype.action = function(action) {
 	}
 
 	if (cmd !== undefined) {
-			if (self.tcp !== undefined) {
-					debug('sending ', cmd, "to", self.tcp.host);
-					self.tcp.send(cmd);
+			if (self.udp !== undefined) {
+					debug('sending ', cmd, "to", self.config.host);
+					self.udp.send(cmd);
 			}
-	}
-
-	if (cmd !== undefined) {
-
-		if (self.socket !== undefined && self.socket.connected) {
-			self.socket.write(cmd+"\n");
-		} else {
-			debug('Socket not connected :(');
-		}
-
 	}
 };
 
